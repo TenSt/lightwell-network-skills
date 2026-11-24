@@ -8,7 +8,7 @@ user-invocable: true
 
 Query Lightwell package and advisory data from the **Lightwell Network** API on `console.redhat.com`. This is the cross-repo view of packages Lightwell has published — filterable by ecosystem, name, and security level (validated / remediated / predisclosure).
 
-Access requires a **Red Hat service account** that belongs to a group granting the **Repositories Viewer** role. There is no pre-existing group for this — someone with permission to manage user access creates a group, assigns it the **Repositories Viewer** role, and adds the service account to it. The bundled script (`scripts/fetch_lightwell_packages.py`, relative to the repo root) handles the SSO token exchange and the API calls; it has no third-party dependencies (Python stdlib only).
+Access requires a Red Hat identity that belongs to a group granting the **Repositories Viewer** role — either a **service account** (the recommended default) or **your own user account**. There is no pre-existing group for this — someone with permission to manage user access creates a group, assigns it the **Repositories Viewer** role, and adds the account to it. The bundled script (`scripts/fetch_lightwell_packages.py`, relative to the repo root) handles the SSO token exchange and the API calls; it has no third-party dependencies (Python stdlib only).
 
 > **Who can manage the group:** Creating a group, assigning it a role, and adding members requires either the **Organization Administrator** or the **User Access Administrator** role. If you have neither, contact an org admin in your organization to do it (or to grant you the User Access Administrator role). If you are unsure who your org admins are, contact Red Hat technical support.
 
@@ -40,6 +40,31 @@ The full API specification is available in three places:
 
    (The legacy `CONSOLE_CLIENT_ID` / `CONSOLE_CLIENT_SECRET` names are still accepted as a fallback. Alternatively pass `--client-id` / `--client-secret`, which override the env vars. Prefer env vars — CLI flags land in shell history.)
 
+## Alternative: authenticate as your own user account
+
+The API only checks the `Authorization: Bearer <token>` header — it does not care whether the token belongs to a service account or to a user. Two ways to get a user-scoped token, in preference order:
+
+**Offline token (scriptable).** Generate a personal offline token at [https://access.redhat.com/management/api](https://access.redhat.com/management/api). It is a long-lived refresh token (it expires after 30 days of non-use), which the script exchanges for a fresh access token on every run:
+
+```bash
+export LW_OFFLINE_TOKEN="<offline-token>"
+python3 scripts/fetch_lightwell_packages.py packages --name jackson
+```
+
+**Existing bearer token (one-off).** If you already have an access token — e.g. copied from the `Authorization` header of an `/api/...` request in a logged-in console.redhat.com browser session — pass it through as-is. Console session tokens live only a few minutes, so this suits a single exploratory call, not a script:
+
+```bash
+export LW_BEARER_TOKEN="<access-token>"
+python3 scripts/fetch_lightwell_packages.py packages --name jackson
+```
+
+Both have CLI equivalents (`--offline-token`, `--token`) that override the env vars; prefer the env vars, since CLI flags land in shell history. Precedence is `--token`/`LW_BEARER_TOKEN` → `--offline-token`/`LW_OFFLINE_TOKEN` → service-account credentials.
+
+Two caveats:
+
+- **Authorization is unchanged.** Your user account needs the **Repositories Viewer** role through a group just as a service account does — a user token does not bypass RBAC, you simply get the 403 under your own identity. Organization Administrators hold the role implicitly. Predisclosure remains gated by the account-level entitlement.
+- **An offline token is a standing credential for your entire Red Hat account**, not a narrowly scoped one. That breadth is exactly why service accounts are the documented default; prefer one for anything automated or shared.
+
 ## How auth works
 
 The service account authenticates with an OAuth2 **client-credentials** grant against Red Hat SSO, then calls the API with the resulting bearer token:
@@ -47,6 +72,8 @@ The service account authenticates with an OAuth2 **client-credentials** grant ag
 1. `POST https://sso.redhat.com/auth/realms/redhat-external/protocol/openid-connect/token`
    with `grant_type=client_credentials`, `client_id`, `client_secret` → returns `access_token`.
 2. `GET .../packages` with header `Authorization: Bearer <access_token>`.
+
+The offline-token flow hits the same endpoint and realm, swapping step 1 for a refresh grant: `grant_type=refresh_token`, `client_id=rhsm-api`, `refresh_token=<offline-token>`. The resulting `access_token` carries your user identity instead of the service account's; step 2 is identical.
 
 Core of the flow, in plain stdlib Python (the full script generalizes this):
 
@@ -143,7 +170,7 @@ Get the `<uuid>` from the `repositories` command. These detail endpoints are sin
 
 ## Steps
 
-1. **Confirm credentials exist.** If `LW_CLIENT_ID` / `LW_CLIENT_SECRET` aren't set (nor the legacy `CONSOLE_*` fallback) and no `--client-id`/`--client-secret` given, walk the user through the one-time setup above.
+1. **Confirm credentials exist.** The script needs one of `LW_BEARER_TOKEN`/`--token`, `LW_OFFLINE_TOKEN`/`--offline-token`, or `LW_CLIENT_ID` + `LW_CLIENT_SECRET`/`--client-id` + `--client-secret` (the legacy `CONSOLE_*` names also work). If none is set, walk the user through the one-time setup above — service account by default, or the user-account path if they prefer it.
 2. **Choose the command and filters** from the user's request — `packages` for the cross-repo package view, `package-versions` for specific versions or CVE resolves/vulnerable filtering, `advisories` for security advisories (severity/CVE filtering), `repositories` to list repos, and the `repo-packages` / `maven-*` / `python-*` commands to drill into a single repository by UUID.
 3. **Run the script.** It exchanges credentials for a token, paginates (`limit`/`offset`) automatically, and prints a table (or raw JSON with `--json`).
 4. **Present results** and offer follow-ups — narrow by ecosystem/name, switch security level, drill into `package-versions`, or emit `--json` for further processing.
@@ -192,8 +219,9 @@ The OpenAPI spec documents `security_level` as `validated, remediated`; `predisc
 | Symptom | Cause / fix |
 |---------|-------------|
 | `token request failed (401/400)` | Wrong `client_id`/`client_secret`, or the secret was rotated. Recreate the service account secret and re-export. |
-| API returns **401** | Token invalid/expired — the script fetches a fresh one each run, so a persistent 401 usually means the credentials themselves are wrong. |
-| API returns **403** | Authenticated but not authorized. The service account is not in a group with the **Repositories Viewer** role. This group is not created by default. Managing it requires the **Organization Administrator** or **User Access Administrator** role: with either, create a group with the **Repositories Viewer** role and add the account to it. With neither, ask an org admin to do so (or to grant you User Access Administrator); contact Red Hat technical support if you don't know who your org admins are. |
+| `token request failed`, `invalid_grant` | The offline token is wrong or has lapsed (they expire after 30 days of non-use). Regenerate it at [access.redhat.com/management/api](https://access.redhat.com/management/api) and re-export `LW_OFFLINE_TOKEN`. |
+| API returns **401** | Token invalid/expired. With service-account credentials or an offline token the script fetches a fresh token each run, so a persistent 401 means the credentials themselves are wrong. With `--token`/`LW_BEARER_TOKEN` the token is used as-is and is usually short-lived — grab a new one, or switch to one of the other two methods. |
+| API returns **403** | Authenticated but not authorized. The account you authenticated as — service account or your own user — is not in a group with the **Repositories Viewer** role. This group is not created by default. Managing it requires the **Organization Administrator** or **User Access Administrator** role: with either, create a group with the **Repositories Viewer** role and add the account to it. With neither, ask an org admin to do so (or to grant you User Access Administrator); contact Red Hat technical support if you don't know who your org admins are. |
 | `predisclosure` returns nothing | Predisclosure is gated by the **account entitlement**, not group/repository permissions — the account lacks the predisclosure entitlement. Confirm entitlement with your Lightwell administrator or Red Hat support. |
 | Empty result set | Filters too narrow — drop `--security-level` or broaden `--name`, and confirm the ecosystem is right. |
 </content>
