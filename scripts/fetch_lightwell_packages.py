@@ -1,16 +1,21 @@
 #!/usr/bin/env python3
 """Fetch Lightwell package information from the console.redhat.com Lightwell Network API.
 
-Authenticates with a Red Hat service account (client-credentials grant against Red Hat
-SSO), then queries the /packages and /package_versions endpoints.
+Authenticates against Red Hat SSO -- with a service account (client-credentials grant) or
+with your own user account (offline token, or a bearer token you already hold) -- then
+queries the /packages and /package_versions endpoints.
 
-The service account must belong to a group granting the "Repositories Viewer" role (no
-such group exists by default -- an org admin must create one and add the service account),
-or the API will return 403 even with a valid token. See SKILL.md for setup.
+Whichever identity you use must belong to a group granting the "Repositories Viewer" role
+(no such group exists by default -- an org admin must create one and add the account), or
+the API will return 403 even with a valid token. See SKILL.md for setup.
 
-Credentials are read from the environment by default and can be overridden on the CLI:
-    LW_CLIENT_ID / LW_CLIENT_SECRET   (env; CONSOLE_CLIENT_ID / CONSOLE_CLIENT_SECRET also accepted)
-    --client-id / --client-secret     (override env)
+Credentials are read from the environment by default and can be overridden on the CLI.
+The first of these that is set wins:
+    LW_BEARER_TOKEN  / --token          an access token you already have (used as-is)
+    LW_OFFLINE_TOKEN / --offline-token  personal offline token, exchanged for an access
+                                        token (https://access.redhat.com/management/api)
+    LW_CLIENT_ID / LW_CLIENT_SECRET     service account (CONSOLE_CLIENT_ID /
+    --client-id  / --client-secret      CONSOLE_CLIENT_SECRET also accepted)
 
 Stdlib only -- no third-party dependencies.
 
@@ -34,22 +39,18 @@ SSO_TOKEN_URL = (
 )
 API_BASE = "https://console.redhat.com/api/lightwell/v0.1"
 
+# Public SSO client used for the personal offline-token (refresh_token) grant.
+OFFLINE_TOKEN_CLIENT_ID = "rhsm-api"
+
 # console.redhat.com pages results; grab them in chunks this size when paginating.
 PAGE_SIZE = 100
 
 
-def get_bearer_token(client_id: str, client_secret: str) -> str:
-    """Exchange service-account credentials for a bearer token via the SSO token endpoint."""
-    body = urllib.parse.urlencode(
-        {
-            "grant_type": "client_credentials",
-            "client_id": client_id,
-            "client_secret": client_secret,
-        }
-    ).encode()
+def _sso_token_request(form: dict, hint: str) -> str:
+    """POST a grant to the SSO token endpoint and return the access_token."""
     req = urllib.request.Request(
         SSO_TOKEN_URL,
-        data=body,
+        data=urllib.parse.urlencode(form).encode(),
         headers={"Content-Type": "application/x-www-form-urlencoded"},
         method="POST",
     )
@@ -58,10 +59,7 @@ def get_bearer_token(client_id: str, client_secret: str) -> str:
             payload = json.load(resp)
     except urllib.error.HTTPError as e:
         detail = e.read().decode(errors="replace")
-        sys.exit(
-            f"ERROR: token request failed ({e.code} {e.reason}).\n"
-            f"Check LW_CLIENT_ID / LW_CLIENT_SECRET.\n{detail}"
-        )
+        sys.exit(f"ERROR: token request failed ({e.code} {e.reason}).\n{hint}\n{detail}")
     except urllib.error.URLError as e:
         sys.exit(f"ERROR: could not reach SSO token endpoint: {e.reason}")
 
@@ -69,6 +67,36 @@ def get_bearer_token(client_id: str, client_secret: str) -> str:
     if not token:
         sys.exit("ERROR: token endpoint returned no access_token.")
     return token
+
+
+def get_bearer_token(client_id: str, client_secret: str) -> str:
+    """Exchange service-account credentials for a bearer token via the SSO token endpoint."""
+    return _sso_token_request(
+        {
+            "grant_type": "client_credentials",
+            "client_id": client_id,
+            "client_secret": client_secret,
+        },
+        "Check LW_CLIENT_ID / LW_CLIENT_SECRET.",
+    )
+
+
+def get_token_from_offline_token(offline_token: str) -> str:
+    """Exchange a personal offline token for a user-scoped bearer token.
+
+    Offline tokens are issued at https://access.redhat.com/management/api and are
+    long-lived refresh tokens for the redhat-external realm; the resulting access token
+    carries your own user identity rather than a service account's.
+    """
+    return _sso_token_request(
+        {
+            "grant_type": "refresh_token",
+            "client_id": OFFLINE_TOKEN_CLIENT_ID,
+            "refresh_token": offline_token,
+        },
+        "Check LW_OFFLINE_TOKEN -- offline tokens expire after 30 days of non-use; "
+        "regenerate at https://access.redhat.com/management/api.",
+    )
 
 
 def _seg(value: str) -> str:
@@ -89,12 +117,17 @@ def api_get(path: str, token: str, params: dict) -> dict:
     except urllib.error.HTTPError as e:
         detail = e.read().decode(errors="replace")
         if e.code == 401:
-            hint = "Token invalid or expired."
+            hint = (
+                "Token invalid or expired. A token passed via --token / LW_BEARER_TOKEN "
+                "is used as-is and is typically short-lived; use --offline-token or "
+                "service-account credentials to have a fresh one fetched each run."
+            )
         elif e.code == 403:
             hint = (
-                "Authenticated but not authorized -- confirm the service account belongs "
-                "to a group with the 'Repositories Viewer' role (an org admin must create "
-                "one and add the account)."
+                "Authenticated but not authorized -- confirm the account you "
+                "authenticated as (service account or your own user) belongs to a group "
+                "with the 'Repositories Viewer' role (an org admin must create one and "
+                "add the account)."
             )
         else:
             hint = ""
@@ -322,10 +355,27 @@ def resolve_credentials(args) -> tuple:
     )
     if not client_id or not client_secret:
         sys.exit(
-            "ERROR: missing credentials. Set LW_CLIENT_ID and "
-            "LW_CLIENT_SECRET (or pass --client-id / --client-secret)."
+            "ERROR: missing credentials. Use one of:\n"
+            "  LW_BEARER_TOKEN  (or --token)          an access token you already have\n"
+            "  LW_OFFLINE_TOKEN (or --offline-token)  your personal offline token\n"
+            "  LW_CLIENT_ID + LW_CLIENT_SECRET        a service account\n"
+            "(or --client-id / --client-secret)."
         )
     return client_id, client_secret
+
+
+def resolve_token(args) -> str:
+    """Return a bearer token, preferring an explicit token, then offline token, then
+    service-account credentials."""
+    token = args.token or os.environ.get("LW_BEARER_TOKEN")
+    if token:
+        return token
+
+    offline_token = args.offline_token or os.environ.get("LW_OFFLINE_TOKEN")
+    if offline_token:
+        return get_token_from_offline_token(offline_token)
+
+    return get_bearer_token(*resolve_credentials(args))
 
 
 def main() -> None:
@@ -335,6 +385,17 @@ def main() -> None:
     # given *after* the subcommand (e.g. `packages --name jackson --json`), which is the
     # ordering the docs and examples assume.
     common = argparse.ArgumentParser(add_help=False)
+    common.add_argument(
+        "--token",
+        help="Bearer token to use as-is, e.g. your own user token (overrides env "
+        "LW_BEARER_TOKEN and every other credential).",
+    )
+    common.add_argument(
+        "--offline-token",
+        dest="offline_token",
+        help="Personal offline token from https://access.redhat.com/management/api, "
+        "exchanged for a user-scoped bearer token (overrides env LW_OFFLINE_TOKEN).",
+    )
     common.add_argument("--client-id", help="Service-account client ID (overrides env).")
     common.add_argument(
         "--client-secret", help="Service-account client secret (overrides env)."
@@ -437,8 +498,7 @@ def main() -> None:
     p_pdet.add_argument("version", help="Python package version.")
 
     args = parser.parse_args()
-    client_id, client_secret = resolve_credentials(args)
-    token = get_bearer_token(client_id, client_secret)
+    token = resolve_token(args)
 
     if args.command == "packages":
         filters = {
