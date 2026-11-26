@@ -238,6 +238,41 @@ class FetchScriptTest(unittest.TestCase):
         self.assertEqual(fetch_all.call_args.args[0], "/packages")
         self.assertEqual(fetch_all.call_args.args[2]["repository"], "lightwell-maven")
 
+    def test_added_filters_are_forwarded(self):
+        cases = [
+            (
+                ["packages", "--search", "spring", "--sort-by", "name:desc", "--demo"],
+                "/packages",
+                {"search": "spring", "sort_by": "name:desc", "demo": "true"},
+            ),
+            (
+                ["package-versions", "--demo"],
+                "/package_versions",
+                {"demo": "true"},
+            ),
+            (
+                ["advisories", "--advisory-id", "RHSA-2024:1234"],
+                "/advisories",
+                {"advisory_id": "RHSA-2024:1234"},
+            ),
+            (
+                ["repo-packages", "repo-uuid", "--sort-by", "last_updated:asc"],
+                "/repositories/repo-uuid/packages",
+                {"sort_by": "last_updated:asc"},
+            ),
+        ]
+        for argv, path, expected in cases:
+            with self.subTest(command=argv[0]):
+                with credential_env(LW_BEARER_TOKEN="tok"):
+                    with patch.object(fetch, "fetch_all", return_value=[]) as fetch_all:
+                        with patch.object(sys, "argv", ["fetch_lightwell_packages.py", *argv]):
+                            with redirect_stdout(io.StringIO()):
+                                fetch.main()
+                self.assertEqual(fetch_all.call_args.args[0], path)
+                sent = fetch_all.call_args.args[2]
+                for key, value in expected.items():
+                    self.assertEqual(sent[key], value)
+
     def test_package_versions_rejects_repository_filter(self):
         env = os.environ.copy()
         for key in CRED_KEYS:

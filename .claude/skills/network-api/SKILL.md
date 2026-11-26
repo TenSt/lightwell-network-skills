@@ -114,8 +114,9 @@ Run with `--help` (or `<command> --help`) for the full flag list.
 
 ```bash
 python3 scripts/fetch_lightwell_packages.py packages \
-    [--ecosystem maven|python|npm] [--name <substring>] [--repository <repo>] \
-    [--security-level validated|remediated|predisclosure] [--limit N] [--json]
+    [--ecosystem maven|python|npm] [--name <substring>] [--search <substring>] \
+    [--repository <repo>] [--security-level validated|remediated|predisclosure] \
+    [--sort-by group/name|name|scope/name|last_publication] [--demo] [--limit N] [--json]
 ```
 
 ### `package-versions` — list versions with CVE filters
@@ -123,7 +124,8 @@ python3 scripts/fetch_lightwell_packages.py packages \
 ```bash
 python3 scripts/fetch_lightwell_packages.py package-versions \
     [--ecosystem ...] [--name <substring>] [--security-level ...] \
-    [--resolves-cve CVE-YYYY-NNNN] [--vulnerable-to-cve CVE-YYYY-NNNN] [--limit N] [--json]
+    [--resolves-cve CVE-YYYY-NNNN] [--vulnerable-to-cve CVE-YYYY-NNNN] \
+    [--demo] [--limit N] [--json]
 ```
 
 ### `advisories` — list security advisories
@@ -131,11 +133,12 @@ python3 scripts/fetch_lightwell_packages.py package-versions \
 ```bash
 python3 scripts/fetch_lightwell_packages.py advisories \
     [--repository <repo>] [--package-name <exact>] [--package-version <exact>] \
-    [--name <substring>] [--severity-min low|moderate|important|critical] \
+    [--advisory-id <exact>] [--name <substring>] \
+    [--severity-min low|moderate|important|critical] \
     [--cve-id CVE-YYYY-NNNN] [--latest-release] [--limit N] [--json]
 ```
 
-`--latest-release` returns only advisories from the highest Lightwell rebuild (baseline → novel → hotfix) of a package/version, and requires `--package-name` and `--package-version`.
+`--advisory-id` is an exact advisory id. `--name` is deprecated: it is a substring match on the advisory id or upstream ids. `--latest-release` returns only advisories from the highest Lightwell rebuild (baseline → novel → hotfix) of a package/version, and requires `--package-name` and `--package-version`.
 
 ### `repositories` — list Lightwell repositories
 
@@ -149,7 +152,7 @@ python3 scripts/fetch_lightwell_packages.py repositories \
 
 ```bash
 python3 scripts/fetch_lightwell_packages.py repo-packages <uuid> \
-    [--search <term>] [--limit N] [--json]
+    [--search <term>] [--sort-by name|last_updated] [--limit N] [--json]
 ```
 
 ### Maven / Python package detail (by repository UUID)
@@ -208,9 +211,14 @@ python3 scripts/fetch_lightwell_packages.py maven-versions <uuid> org.springfram
 | `--name` | ✓ | ✓ | Substring match |
 | `--security-level` | ✓ | ✓ | `validated`, `remediated`, `predisclosure` |
 | `--repository` | ✓ | | Repository name |
+| `--search` | ✓ | | Name or group/scope substring |
+| `--sort-by` | ✓ | | `group/name`, `name`, `scope/name`, `last_publication`; optional `:asc` or `:desc` (default asc) |
+| `--demo` | ✓ | ✓ | Demo repositories instead of production |
 | `--resolves-cve` | | ✓ | Versions that fix this CVE |
 | `--vulnerable-to-cve` | | ✓ | Versions still vulnerable to this CVE |
 | `--limit` | ✓ | ✓ | Caps total results (default: all, paginated) |
+
+`packages --sort-by` accepts those fields. `repo-packages --sort-by` accepts `name` (default asc) and `last_updated` (default desc), with the same `:asc` or `:desc` suffix.
 
 The OpenAPI spec documents `security_level` as `validated, remediated`; `predisclosure` is also a valid level. Group/repository permissions do not control predisclosure access — it is gated separately by the **entitlement on the account**, so an account without the predisclosure entitlement will see no predisclosure data even with full repository access.
 

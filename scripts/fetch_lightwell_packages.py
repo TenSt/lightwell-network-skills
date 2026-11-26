@@ -449,10 +449,25 @@ def main() -> None:
     p_pkg = sub.add_parser("packages", parents=[common], help="List Lightwell packages (cross-repo).")
     p_pkg.add_argument("--ecosystem", help="Filter by ecosystem: maven, python, npm.")
     p_pkg.add_argument("--name", help="Filter by package name (substring match).")
+    p_pkg.add_argument(
+        "--search",
+        help="Filter by package name or group/scope (substring match).",
+    )
+    p_pkg.add_argument(
+        "--sort-by",
+        dest="sort_by",
+        help="Sort by group/name, name, scope/name, or last_publication. "
+        "Suffix :asc or :desc (default asc).",
+    )
     p_pkg.add_argument("--repository", help="Filter by repository name.")
     p_pkg.add_argument(
         "--security-level",
         help="Filter by security level: validated, remediated, predisclosure.",
+    )
+    p_pkg.add_argument(
+        "--demo",
+        action="store_true",
+        help="Return demo repositories instead of production ones.",
     )
 
     p_ver = sub.add_parser("package-versions", parents=[common], help="List Lightwell package versions.")
@@ -470,6 +485,11 @@ def main() -> None:
         dest="vulnerable_to_cve",
         help="Only versions vulnerable to this CVE ID.",
     )
+    p_ver.add_argument(
+        "--demo",
+        action="store_true",
+        help="Return demo repositories instead of production ones.",
+    )
 
     p_adv = sub.add_parser("advisories", parents=[common], help="List Lightwell security advisories.")
     p_adv.add_argument("--repository", help="Filter by repository name.")
@@ -477,7 +497,15 @@ def main() -> None:
     p_adv.add_argument(
         "--package-version", dest="package_version", help="Package version (exact)."
     )
-    p_adv.add_argument("--name", help="Advisory id or alias (substring match).")
+    p_adv.add_argument(
+        "--advisory-id",
+        dest="advisory_id",
+        help="Filter by advisory id (exact match).",
+    )
+    p_adv.add_argument(
+        "--name",
+        help="Deprecated. Substring match on advisory id or upstream ids.",
+    )
     p_adv.add_argument(
         "--severity-min",
         dest="severity_min",
@@ -504,6 +532,12 @@ def main() -> None:
     )
     p_rpkg.add_argument("uuid", help="Repository UUID.")
     p_rpkg.add_argument("--search", help="Search term to filter packages.")
+    p_rpkg.add_argument(
+        "--sort-by",
+        dest="sort_by",
+        help="Sort by name or last_updated. Suffix :asc or :desc "
+        "(name defaults to asc, last_updated to desc).",
+    )
 
     p_mvers = sub.add_parser(
         "maven-versions", parents=[common], help="List versions of a Maven package in a repository."
@@ -540,8 +574,11 @@ def main() -> None:
         filters = {
             "ecosystem": args.ecosystem,
             "name": args.name,
+            "search": args.search,
+            "sort_by": args.sort_by,
             "repository": args.repository,
             "security_level": args.security_level,
+            "demo": "true" if args.demo else None,
         }
         rows = fetch_all("/packages", token, filters, args.limit)
         if args.json:
@@ -555,6 +592,7 @@ def main() -> None:
             "security_level": args.security_level,
             "resolves_cve": args.resolves_cve,
             "vulnerable_to_cve": args.vulnerable_to_cve,
+            "demo": "true" if args.demo else None,
         }
         rows = fetch_all("/package_versions", token, filters, args.limit)
         if args.json:
@@ -567,6 +605,7 @@ def main() -> None:
             "package_name": args.package_name,
             "package_version": args.package_version,
             "name": args.name,
+            "advisory_id": args.advisory_id,
             "severity_min": args.severity_min,
             "cve_id": args.cve_id,
             "latest_release": "true" if args.latest_release else None,
@@ -593,7 +632,7 @@ def main() -> None:
         rows = fetch_all(
             f"/repositories/{uuid}/packages",
             token,
-            {"search": args.search},
+            {"search": args.search, "sort_by": args.sort_by},
             args.limit,
             data_key="results",
             total_in_meta=False,
