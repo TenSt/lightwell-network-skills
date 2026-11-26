@@ -13,7 +13,7 @@ Access requires a Red Hat identity that belongs to a group granting the **Reposi
 > **Who can manage the group:** Creating a group, assigning it a role, and adding members requires either the **Organization Administrator** or the **User Access Administrator** role. If you have neither, contact an org admin in your organization to do it (or to grant you the User Access Administrator role). If you are unsure who your org admins are, contact Red Hat technical support.
 
 - **API base:** `https://console.redhat.com/api/lightwell/v0.1`
-- **Endpoints used:** `GET /packages`, `GET /package_versions`, `GET /advisories`, `GET /repositories`, `GET /repositories/{uuid}/packages`, `GET /repositories/{uuid}/java_packages/{group}/{name}[/{version}]`, `GET /repositories/{uuid}/python_packages/{name}[/{version}]`, `GET /repositories/{uuid}/javascript_packages/{scope}/{name}[/{version}]`
+- **Endpoints used:** `GET /packages`, `GET /package_versions`, `GET /advisories`, `GET /repositories`, `GET /repositories/{uuid}/packages`, `GET /repositories/{uuid}/java_packages/{group}/{name}[/{version}]`, `GET /repositories/{uuid}/python_packages/{name}[/{version}]`, `GET /repositories/{uuid}/javascript_packages/{scope}/{name}[/{version}]`, `GET /terms/required`
 
 ### API spec
 
@@ -177,10 +177,18 @@ python3 scripts/fetch_lightwell_packages.py npm-detail <uuid> <scope> <name> <ve
 
 Get the `<uuid>` from the `repositories` command. These detail endpoints are single-fetch (not paginated).
 
+### `terms` — check whether Lightwell terms must be accepted
+
+```bash
+python3 scripts/fetch_lightwell_packages.py terms [--json]
+```
+
+`GET /terms/required` reports whether the current account must accept terms. When acceptance is required, the response includes the site and the event names. Other read commands return **428** until the terms are accepted at [https://console.redhat.com/lightwell](https://console.redhat.com/lightwell).
+
 ## Steps
 
 1. **Confirm credentials exist.** The script needs one of `LW_BEARER_TOKEN`/`--token`, `LW_OFFLINE_TOKEN`/`--offline-token`, or `LW_CLIENT_ID` + `LW_CLIENT_SECRET`/`--client-id` + `--client-secret` (the legacy `CONSOLE_*` names also work). If none is set, walk the user through the one-time setup above — service account by default, or the user-account path if they prefer it.
-2. **Choose the command and filters** from the user's request — `packages` for the cross-repo package view, `package-versions` for specific versions or CVE resolves/vulnerable filtering, `advisories` for security advisories (severity/CVE filtering), `repositories` to list repos, and the `repo-packages` / `maven-*` / `python-*` / `npm-*` commands to drill into a single repository by UUID.
+2. **Choose the command and filters** from the user's request — `packages` for the cross-repo package view, `package-versions` for specific versions or CVE resolves/vulnerable filtering, `advisories` for security advisories (severity/CVE filtering), `repositories` to list repos, the `repo-packages` / `maven-*` / `python-*` / `npm-*` commands to drill into a single repository by UUID, and `terms` to check whether terms acceptance is required.
 3. **Run the script.** It exchanges credentials for a token, paginates (`limit`/`offset`) automatically, and prints a table (or raw JSON with `--json`).
 4. **Present results** and offer follow-ups — narrow by ecosystem/name, switch security level, drill into `package-versions`, or emit `--json` for further processing.
 
@@ -240,6 +248,7 @@ The OpenAPI spec documents `security_level` as `validated, remediated`; `predisc
 | `token request failed`, `invalid_grant` | The offline token is wrong or has lapsed (they expire after 30 days of non-use). Regenerate it at [access.redhat.com/management/api](https://access.redhat.com/management/api) and re-export `LW_OFFLINE_TOKEN`. |
 | API returns **401** | Token invalid/expired. With service-account credentials or an offline token the script fetches a fresh token each run, so a persistent 401 means the credentials themselves are wrong. With `--token`/`LW_BEARER_TOKEN` the token is used as-is and is usually short-lived — grab a new one, or switch to one of the other two methods. |
 | API returns **403** | Authenticated but not authorized. The account you authenticated as — service account or your own user — is not in a group with the **Repositories Viewer** role. This group is not created by default. Managing it requires the **Organization Administrator** or **User Access Administrator** role: with either, create a group with the **Repositories Viewer** role and add the account to it. With neither, ask an org admin to do so (or to grant you User Access Administrator); contact Red Hat technical support if you don't know who your org admins are. |
+| API returns **428** | Lightwell terms have not been accepted. Run `terms` to see the required events, then accept them at [https://console.redhat.com/lightwell](https://console.redhat.com/lightwell). |
 | `predisclosure` returns nothing | Predisclosure is gated by the **account entitlement**, not group/repository permissions — the account lacks the predisclosure entitlement. Confirm entitlement with your Lightwell administrator or Red Hat support. |
 | Empty result set | Filters too narrow — drop `--security-level` or broaden `--name`, and confirm the ecosystem is right. |
 </content>

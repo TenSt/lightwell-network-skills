@@ -132,6 +132,11 @@ def api_get(path: str, token: str, params: dict) -> dict:
                 "with the 'Repositories Viewer' role (an org admin must create one and "
                 "add the account)."
             )
+        elif e.code == 428:
+            hint = (
+                "Lightwell terms have not been accepted. Run the terms command to see "
+                "what is required, then accept them at https://console.redhat.com/lightwell."
+            )
         else:
             hint = ""
         sys.exit(f"ERROR: {path} returned {e.code} {e.reason}. {hint}\n{detail}")
@@ -379,6 +384,20 @@ def print_python_versions_table(body: dict) -> None:
     print(f"\n{len(versions)} version(s).")
 
 
+def print_terms(body: dict) -> None:
+    """Print the terms-required check."""
+    if body.get("required"):
+        print("Terms acceptance is required.")
+    else:
+        print("Terms acceptance is not required.")
+    site = body.get("site") or ""
+    if site:
+        print(f"Site: {site}")
+    events = body.get("events") or []
+    if events:
+        print("Events: " + ", ".join(str(event) for event in events))
+
+
 def print_detail(body: dict) -> None:
     """Print a single detail object as aligned key/value lines."""
     for key, value in body.items():
@@ -618,6 +637,12 @@ def main() -> None:
     p_ndet.add_argument("name", help="JS package name.")
     p_ndet.add_argument("version", help="JS package upstream version.")
 
+    sub.add_parser(
+        "terms",
+        parents=[common],
+        help="Check whether Lightwell terms acceptance is required.",
+    )
+
     args = parser.parse_args()
     token = resolve_token(args)
 
@@ -746,6 +771,12 @@ def main() -> None:
             print(json.dumps(body, indent=2))
         else:
             print_detail(body)
+    elif args.command == "terms":
+        body = api_get("/terms/required", token, {})
+        if args.json:
+            print(json.dumps(body, indent=2))
+        else:
+            print_terms(body)
 
 
 if __name__ == "__main__":

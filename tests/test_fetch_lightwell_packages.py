@@ -355,6 +355,38 @@ class FetchScriptTest(unittest.TestCase):
         self.assertIn("left-pad\n", text)
         self.assertNotIn("@-", text)
 
+    def test_terms_command_calls_terms_required(self):
+        with credential_env(LW_BEARER_TOKEN="tok"):
+            with patch.object(
+                fetch, "api_get", return_value={"required": True, "site": "lightwell", "events": ["tou"]}
+            ) as api_get:
+                with patch.object(sys, "argv", ["fetch_lightwell_packages.py", "terms"]):
+                    with redirect_stdout(io.StringIO()) as out:
+                        fetch.main()
+        self.assertEqual(api_get.call_args.args[0], "/terms/required")
+        self.assertIn("Terms acceptance is required.", out.getvalue())
+        self.assertIn("tou", out.getvalue())
+
+    def test_terms_table_reports_when_acceptance_is_not_required(self):
+        with redirect_stdout(io.StringIO()) as out:
+            fetch.print_terms({"required": False})
+        self.assertIn("Terms acceptance is not required.", out.getvalue())
+
+    def test_api_get_explains_terms_precondition(self):
+        err = fetch.urllib.error.HTTPError(
+            url="https://console.redhat.com/api/lightwell/v0.1/packages",
+            code=428,
+            msg="Precondition Required",
+            hdrs=None,
+            fp=io.BytesIO(b'{"errors":[{"title":"Terms acceptance required"}]}'),
+        )
+        with patch.object(fetch.urllib.request, "urlopen", side_effect=err):
+            with self.assertRaises(SystemExit) as caught:
+                fetch.api_get("/packages", "tok", {})
+        message = str(caught.exception)
+        self.assertIn("428", message)
+        self.assertIn("terms command", message)
+
 
 if __name__ == "__main__":
     unittest.main()
