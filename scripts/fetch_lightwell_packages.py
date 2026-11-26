@@ -449,6 +449,7 @@ def main() -> None:
     p_pkg = sub.add_parser("packages", parents=[common], help="List Lightwell packages (cross-repo).")
     p_pkg.add_argument("--ecosystem", help="Filter by ecosystem: maven, python, npm.")
     p_pkg.add_argument("--name", help="Filter by package name (substring match).")
+    p_pkg.add_argument("--repository", help="Filter by repository name.")
     p_pkg.add_argument(
         "--security-level",
         help="Filter by security level: validated, remediated, predisclosure.",
@@ -461,7 +462,6 @@ def main() -> None:
         "--security-level",
         help="Filter by security level: validated, remediated, predisclosure.",
     )
-    p_ver.add_argument("--repository", help="Filter by repository.")
     p_ver.add_argument(
         "--resolves-cve", dest="resolves_cve", help="Only versions that resolve this CVE ID."
     )
@@ -540,6 +540,7 @@ def main() -> None:
         filters = {
             "ecosystem": args.ecosystem,
             "name": args.name,
+            "repository": args.repository,
             "security_level": args.security_level,
         }
         rows = fetch_all("/packages", token, filters, args.limit)
@@ -552,7 +553,6 @@ def main() -> None:
             "ecosystem": args.ecosystem,
             "name": args.name,
             "security_level": args.security_level,
-            "repository": args.repository,
             "resolves_cve": args.resolves_cve,
             "vulnerable_to_cve": args.vulnerable_to_cve,
         }
@@ -603,7 +603,7 @@ def main() -> None:
         else:
             print_repo_packages_table(rows)
     elif args.command == "maven-versions":
-        path = f"/repositories/{_seg(args.uuid)}/maven_packages/{_seg(args.group)}/{_seg(args.name)}"
+        path = f"/repositories/{_seg(args.uuid)}/java_packages/{_seg(args.group)}/{_seg(args.name)}"
         body = api_get(path, token, {})
         if args.json:
             print(json.dumps(body, indent=2))
@@ -611,7 +611,7 @@ def main() -> None:
             print_maven_versions_table(body)
     elif args.command == "maven-detail":
         path = (
-            f"/repositories/{_seg(args.uuid)}/maven_packages/"
+            f"/repositories/{_seg(args.uuid)}/java_packages/"
             f"{_seg(args.group)}/{_seg(args.name)}/{_seg(args.version)}"
         )
         body = api_get(path, token, {})

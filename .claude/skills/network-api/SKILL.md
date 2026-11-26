@@ -13,7 +13,7 @@ Access requires a Red Hat identity that belongs to a group granting the **Reposi
 > **Who can manage the group:** Creating a group, assigning it a role, and adding members requires either the **Organization Administrator** or the **User Access Administrator** role. If you have neither, contact an org admin in your organization to do it (or to grant you the User Access Administrator role). If you are unsure who your org admins are, contact Red Hat technical support.
 
 - **API base:** `https://console.redhat.com/api/lightwell/v0.1`
-- **Endpoints used:** `GET /packages`, `GET /package_versions`, `GET /advisories`, `GET /repositories`, `GET /repositories/{uuid}/packages`, `GET /repositories/{uuid}/maven_packages/{group}/{name}[/{version}]`, `GET /repositories/{uuid}/python_packages/{name}[/{version}]`
+- **Endpoints used:** `GET /packages`, `GET /package_versions`, `GET /advisories`, `GET /repositories`, `GET /repositories/{uuid}/packages`, `GET /repositories/{uuid}/java_packages/{group}/{name}[/{version}]`, `GET /repositories/{uuid}/python_packages/{name}[/{version}]`
 
 ### API spec
 
@@ -114,7 +114,7 @@ Run with `--help` (or `<command> --help`) for the full flag list.
 
 ```bash
 python3 scripts/fetch_lightwell_packages.py packages \
-    [--ecosystem maven|python|npm] [--name <substring>] \
+    [--ecosystem maven|python|npm] [--name <substring>] [--repository <repo>] \
     [--security-level validated|remediated|predisclosure] [--limit N] [--json]
 ```
 
@@ -122,7 +122,7 @@ python3 scripts/fetch_lightwell_packages.py packages \
 
 ```bash
 python3 scripts/fetch_lightwell_packages.py package-versions \
-    [--ecosystem ...] [--name <substring>] [--security-level ...] [--repository <repo>] \
+    [--ecosystem ...] [--name <substring>] [--security-level ...] \
     [--resolves-cve CVE-YYYY-NNNN] [--vulnerable-to-cve CVE-YYYY-NNNN] [--limit N] [--json]
 ```
 
@@ -207,7 +207,7 @@ python3 scripts/fetch_lightwell_packages.py maven-versions <uuid> org.springfram
 | `--ecosystem` | ✓ | ✓ | `maven`, `python`, `npm` |
 | `--name` | ✓ | ✓ | Substring match |
 | `--security-level` | ✓ | ✓ | `validated`, `remediated`, `predisclosure` |
-| `--repository` | | ✓ | Exact repository |
+| `--repository` | ✓ | | Repository name |
 | `--resolves-cve` | | ✓ | Versions that fix this CVE |
 | `--vulnerable-to-cve` | | ✓ | Versions still vulnerable to this CVE |
 | `--limit` | ✓ | ✓ | Caps total results (default: all, paginated) |

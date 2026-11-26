@@ -7,13 +7,14 @@ and the missing-credentials path asserts urllib is never called.
 from __future__ import annotations
 
 import ast
+import io
 import os
 import py_compile
 import re
 import subprocess
 import sys
 import unittest
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -223,6 +224,54 @@ class FetchScriptTest(unittest.TestCase):
                 with self.assertRaises(SystemExit) as caught:
                     fetch.resolve_token(namespace(client_id="flag-id"))
         self.assertIn("missing credentials", str(caught.exception))
+
+    def test_repository_filter_is_sent_on_packages(self):
+        with credential_env(LW_BEARER_TOKEN="tok"):
+            with patch.object(fetch, "fetch_all", return_value=[]) as fetch_all:
+                with patch.object(
+                    sys,
+                    "argv",
+                    ["fetch_lightwell_packages.py", "packages", "--repository", "lightwell-maven"],
+                ):
+                    with redirect_stdout(io.StringIO()):
+                        fetch.main()
+        self.assertEqual(fetch_all.call_args.args[0], "/packages")
+        self.assertEqual(fetch_all.call_args.args[2]["repository"], "lightwell-maven")
+
+    def test_package_versions_rejects_repository_filter(self):
+        env = os.environ.copy()
+        for key in CRED_KEYS:
+            env.pop(key, None)
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "package-versions", "--repository", "lightwell-maven"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            env=env,
+        )
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("unrecognized arguments: --repository", result.stderr)
+
+    def test_maven_commands_call_java_package_paths(self):
+        cases = [
+            (
+                ["maven-versions", "repo-uuid", "org.example", "artifact"],
+                "/repositories/repo-uuid/java_packages/org.example/artifact",
+            ),
+            (
+                ["maven-detail", "repo-uuid", "org.example", "artifact", "1.2.3"],
+                "/repositories/repo-uuid/java_packages/org.example/artifact/1.2.3",
+            ),
+        ]
+        for argv, path in cases:
+            with self.subTest(command=argv[0]):
+                with credential_env(LW_BEARER_TOKEN="tok"):
+                    with patch.object(fetch, "api_get", return_value={}) as api_get:
+                        with patch.object(sys, "argv", ["fetch_lightwell_packages.py", *argv]):
+                            with redirect_stdout(io.StringIO()):
+                                fetch.main()
+                self.assertEqual(api_get.call_args.args[0], path)
 
 
 if __name__ == "__main__":
