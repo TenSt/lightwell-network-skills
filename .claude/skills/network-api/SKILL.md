@@ -13,7 +13,7 @@ Access requires a Red Hat identity that belongs to a group granting the **Reposi
 > **Who can manage the group:** Creating a group, assigning it a role, and adding members requires either the **Organization Administrator** or the **User Access Administrator** role. If you have neither, contact an org admin in your organization to do it (or to grant you the User Access Administrator role). If you are unsure who your org admins are, contact Red Hat technical support.
 
 - **API base:** `https://console.redhat.com/api/lightwell/v0.1`
-- **Endpoints used:** `GET /packages`, `GET /package_versions`, `GET /advisories`, `GET /repositories`, `GET /repositories/{uuid}/packages`, `GET /repositories/{uuid}/java_packages/{group}/{name}[/{version}]`, `GET /repositories/{uuid}/python_packages/{name}[/{version}]`
+- **Endpoints used:** `GET /packages`, `GET /package_versions`, `GET /advisories`, `GET /repositories`, `GET /repositories/{uuid}/packages`, `GET /repositories/{uuid}/java_packages/{group}/{name}[/{version}]`, `GET /repositories/{uuid}/python_packages/{name}[/{version}]`, `GET /repositories/{uuid}/javascript_packages/{scope}/{name}[/{version}]`
 
 ### API spec
 
@@ -155,7 +155,7 @@ python3 scripts/fetch_lightwell_packages.py repo-packages <uuid> \
     [--search <term>] [--sort-by name|last_updated] [--limit N] [--json]
 ```
 
-### Maven / Python package detail (by repository UUID)
+### Maven / Python / JavaScript package detail (by repository UUID)
 
 ```bash
 # All versions of a Maven package
@@ -167,6 +167,12 @@ python3 scripts/fetch_lightwell_packages.py maven-detail <uuid> <group> <name> <
 python3 scripts/fetch_lightwell_packages.py python-versions <uuid> <name> [--json]
 # Metadata/distributions for one Python version
 python3 scripts/fetch_lightwell_packages.py python-detail <uuid> <name> <version> [--json]
+
+# All versions of a JavaScript package. <scope> is the npm scope, such as @types.
+# Unscoped packages use - as the scope.
+python3 scripts/fetch_lightwell_packages.py npm-versions <uuid> <scope> <name> [--json]
+# Metadata for one JavaScript version
+python3 scripts/fetch_lightwell_packages.py npm-detail <uuid> <scope> <name> <version> [--json]
 ```
 
 Get the `<uuid>` from the `repositories` command. These detail endpoints are single-fetch (not paginated).
@@ -174,7 +180,7 @@ Get the `<uuid>` from the `repositories` command. These detail endpoints are sin
 ## Steps
 
 1. **Confirm credentials exist.** The script needs one of `LW_BEARER_TOKEN`/`--token`, `LW_OFFLINE_TOKEN`/`--offline-token`, or `LW_CLIENT_ID` + `LW_CLIENT_SECRET`/`--client-id` + `--client-secret` (the legacy `CONSOLE_*` names also work). If none is set, walk the user through the one-time setup above — service account by default, or the user-account path if they prefer it.
-2. **Choose the command and filters** from the user's request — `packages` for the cross-repo package view, `package-versions` for specific versions or CVE resolves/vulnerable filtering, `advisories` for security advisories (severity/CVE filtering), `repositories` to list repos, and the `repo-packages` / `maven-*` / `python-*` commands to drill into a single repository by UUID.
+2. **Choose the command and filters** from the user's request — `packages` for the cross-repo package view, `package-versions` for specific versions or CVE resolves/vulnerable filtering, `advisories` for security advisories (severity/CVE filtering), `repositories` to list repos, and the `repo-packages` / `maven-*` / `python-*` / `npm-*` commands to drill into a single repository by UUID.
 3. **Run the script.** It exchanges credentials for a token, paginates (`limit`/`offset`) automatically, and prints a table (or raw JSON with `--json`).
 4. **Present results** and offer follow-ups — narrow by ecosystem/name, switch security level, drill into `package-versions`, or emit `--json` for further processing.
 
@@ -201,6 +207,10 @@ python3 scripts/fetch_lightwell_packages.py advisories --package-name spring-bea
 # List maven repositories, then drill into one
 python3 scripts/fetch_lightwell_packages.py repositories --content-type maven
 python3 scripts/fetch_lightwell_packages.py maven-versions <uuid> org.springframework spring-beans
+
+# Versions of a scoped JavaScript package, then an unscoped one
+python3 scripts/fetch_lightwell_packages.py npm-versions <uuid> @types is-odd
+python3 scripts/fetch_lightwell_packages.py npm-versions <uuid> - left-pad
 ```
 
 ## Filter reference

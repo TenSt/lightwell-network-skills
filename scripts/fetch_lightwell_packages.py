@@ -325,6 +325,36 @@ def print_maven_versions_table(body: dict) -> None:
     print(f"\n{len(versions)} version(s).")
 
 
+def print_npm_versions_table(body: dict) -> None:
+    versions = body.get("versions") or []
+    if not versions:
+        print("No versions found.")
+        return
+    scope = str(body.get("scope") or "")
+    name = str(body.get("name") or "")
+    if scope and scope != "-":
+        if not scope.startswith("@"):
+            scope = f"@{scope}"
+        print(f"{scope}/{name}")
+    else:
+        print(name)
+    header = ["VERSION", "LAST_UPDATED", "BUILDS"]
+    lines = ["\t".join(header)]
+    for v in versions:
+        builds = v.get("builds") or []
+        lines.append(
+            "\t".join(
+                [
+                    str(v.get("version", "")),
+                    str(v.get("last_updated", "")),
+                    f"{len(builds)} build(s)",
+                ]
+            )
+        )
+    print("\n".join(lines))
+    print(f"\n{len(versions)} version(s).")
+
+
 def print_python_versions_table(body: dict) -> None:
     versions = body.get("versions") or []
     if not versions:
@@ -567,6 +597,27 @@ def main() -> None:
     p_pdet.add_argument("name", help="Python package normalized name.")
     p_pdet.add_argument("version", help="Python package version.")
 
+    p_nvers = sub.add_parser(
+        "npm-versions", parents=[common], help="List versions of a JavaScript package in a repository."
+    )
+    p_nvers.add_argument("uuid", help="Repository UUID.")
+    p_nvers.add_argument(
+        "scope",
+        help="JS package scope (for example @types). Use - for unscoped packages.",
+    )
+    p_nvers.add_argument("name", help="JS package name.")
+
+    p_ndet = sub.add_parser(
+        "npm-detail", parents=[common], help="Get a specific JavaScript package version."
+    )
+    p_ndet.add_argument("uuid", help="Repository UUID.")
+    p_ndet.add_argument(
+        "scope",
+        help="JS package scope (for example @types). Use - for unscoped packages.",
+    )
+    p_ndet.add_argument("name", help="JS package name.")
+    p_ndet.add_argument("version", help="JS package upstream version.")
+
     args = parser.parse_args()
     token = resolve_token(args)
 
@@ -669,6 +720,26 @@ def main() -> None:
         path = (
             f"/repositories/{_seg(args.uuid)}/python_packages/"
             f"{_seg(args.name)}/{_seg(args.version)}"
+        )
+        body = api_get(path, token, {})
+        if args.json:
+            print(json.dumps(body, indent=2))
+        else:
+            print_detail(body)
+    elif args.command == "npm-versions":
+        path = (
+            f"/repositories/{_seg(args.uuid)}/javascript_packages/"
+            f"{_seg(args.scope)}/{_seg(args.name)}"
+        )
+        body = api_get(path, token, {})
+        if args.json:
+            print(json.dumps(body, indent=2))
+        else:
+            print_npm_versions_table(body)
+    elif args.command == "npm-detail":
+        path = (
+            f"/repositories/{_seg(args.uuid)}/javascript_packages/"
+            f"{_seg(args.scope)}/{_seg(args.name)}/{_seg(args.version)}"
         )
         body = api_get(path, token, {})
         if args.json:

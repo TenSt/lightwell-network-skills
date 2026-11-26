@@ -83,7 +83,7 @@ class FetchScriptTest(unittest.TestCase):
         for key in CRED_KEYS:
             env.pop(key, None)
         # Keep the usage line's {command,command} group on one line.
-        env["COLUMNS"] = "240"
+        env["COLUMNS"] = "320"
         top = subprocess.run(
             [sys.executable, str(SCRIPT), "--help"],
             check=False,
@@ -307,6 +307,53 @@ class FetchScriptTest(unittest.TestCase):
                             with redirect_stdout(io.StringIO()):
                                 fetch.main()
                 self.assertEqual(api_get.call_args.args[0], path)
+
+    def test_npm_commands_call_javascript_package_paths(self):
+        cases = [
+            (
+                ["npm-versions", "repo-uuid", "@types", "is-odd"],
+                "/repositories/repo-uuid/javascript_packages/%40types/is-odd",
+            ),
+            (
+                ["npm-detail", "repo-uuid", "-", "left-pad", "1.0.0"],
+                "/repositories/repo-uuid/javascript_packages/-/left-pad/1.0.0",
+            ),
+        ]
+        for argv, path in cases:
+            with self.subTest(command=argv[0]):
+                with credential_env(LW_BEARER_TOKEN="tok"):
+                    with patch.object(fetch, "api_get", return_value={}) as api_get:
+                        with patch.object(sys, "argv", ["fetch_lightwell_packages.py", *argv]):
+                            with redirect_stdout(io.StringIO()):
+                                fetch.main()
+                self.assertEqual(api_get.call_args.args[0], path)
+
+    def test_npm_versions_table_labels_scope(self):
+        with redirect_stdout(io.StringIO()) as out:
+            fetch.print_npm_versions_table(
+                {
+                    "scope": "@types",
+                    "name": "is-odd",
+                    "versions": [
+                        {"version": "3.0.0", "last_updated": "2024-01-01", "builds": [{}]}
+                    ],
+                }
+            )
+        text = out.getvalue()
+        self.assertIn("@types/is-odd", text)
+        self.assertIn("3.0.0", text)
+
+        with redirect_stdout(io.StringIO()) as out:
+            fetch.print_npm_versions_table(
+                {
+                    "scope": "-",
+                    "name": "left-pad",
+                    "versions": [{"version": "1.0.0", "builds": []}],
+                }
+            )
+        text = out.getvalue()
+        self.assertIn("left-pad\n", text)
+        self.assertNotIn("@-", text)
 
 
 if __name__ == "__main__":
