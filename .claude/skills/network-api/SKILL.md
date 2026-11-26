@@ -13,7 +13,8 @@ Access requires a Red Hat identity that belongs to a group granting the **Reposi
 > **Who can manage the group:** Creating a group, assigning it a role, and adding members requires either the **Organization Administrator** or the **User Access Administrator** role. If you have neither, contact an org admin in your organization to do it (or to grant you the User Access Administrator role). If you are unsure who your org admins are, contact Red Hat technical support.
 
 - **API base:** `https://console.redhat.com/api/lightwell/v0.1`
-- **Endpoints used:** `GET /packages`, `GET /package_versions`, `GET /advisories`, `GET /repositories`, `GET /repositories/{uuid}/packages`, `GET /repositories/{uuid}/java_packages/{group}/{name}[/{version}]`, `GET /repositories/{uuid}/python_packages/{name}[/{version}]`, `GET /repositories/{uuid}/javascript_packages/{scope}/{name}[/{version}]`, `GET /terms/required`
+- **Coverage reports base:** `https://console.redhat.com/api/content-sources/v1.0` until those routes move onto the Lightwell path. The paths stay `/coverage_reports/`.
+- **Endpoints used:** `GET /packages`, `GET /package_versions`, `GET /advisories`, `GET /repositories`, `GET /repositories/{uuid}/packages`, `GET /repositories/{uuid}/java_packages/{group}/{name}[/{version}]`, `GET /repositories/{uuid}/python_packages/{name}[/{version}]`, `GET /repositories/{uuid}/javascript_packages/{scope}/{name}[/{version}]`, `GET /terms/required`, the `/clearinghouse/submissions` operations (list, get, create, CSV create, files, packages, submit, process, download, archive), and `POST /coverage_reports/`, `GET /coverage_reports/{uuid}`, `GET /coverage_reports/{uuid}/packages`
 
 ### API spec
 
@@ -185,10 +186,46 @@ python3 scripts/fetch_lightwell_packages.py terms [--json]
 
 `GET /terms/required` reports whether the current account must accept terms. When acceptance is required, the response includes the site and the event names. Other read commands return **428** until the terms are accepted at [https://console.redhat.com/lightwell](https://console.redhat.com/lightwell).
 
+### `submissions` — clearinghouse submissions
+
+Creating, adding files, deleting, and submitting require the **Lightwell clearinghouse** feature. Processing and downloads require **Lightwell clearinghouse read**, and the caller's username must be listed on the submission's CID. Downloads are available once the submission is submitted or processed. Each file can be at most 50 MiB, and `add-files` accepts at most 20 files.
+
+```bash
+python3 scripts/fetch_lightwell_packages.py submissions list [--limit N] [--json]
+python3 scripts/fetch_lightwell_packages.py submissions get <uuid> [--json]
+python3 scripts/fetch_lightwell_packages.py submissions create --file intake.json [--json]
+python3 scripts/fetch_lightwell_packages.py submissions create-csv --name <label> --file vulns.csv [--json]
+python3 scripts/fetch_lightwell_packages.py submissions add-files <uuid> <file> [<file> ...] [--json]
+python3 scripts/fetch_lightwell_packages.py submissions delete-file <uuid> <filename>
+python3 scripts/fetch_lightwell_packages.py submissions delete <uuid>
+python3 scripts/fetch_lightwell_packages.py submissions submit <uuid> [--json]
+python3 scripts/fetch_lightwell_packages.py submissions process <uuid> [--json]
+python3 scripts/fetch_lightwell_packages.py submissions packages <uuid> \
+    [--ecosystem Java,Unknown] [--valid-purl true|false] [--limit N] [--json]
+python3 scripts/fetch_lightwell_packages.py submissions download <uuid> --output <path>
+python3 scripts/fetch_lightwell_packages.py submissions download-file <uuid> <filename> --output <path>
+python3 scripts/fetch_lightwell_packages.py submissions archive <uuid> --output <path>
+```
+
+`create` posts an intake JSON file. It needs `name` and a non-empty `vulnerabilities` array. Each vulnerability needs `vulnerability_id`, `packageurl`, `title`, and `description`. `create-csv` uses those names as the header. `vulnerability_id`, `packageurl`, `title`, and `description` are required columns. Optional columns are `component_name`, `component_version`, `cvss_severity`, `cvss_score`, `cwe`, `cvss_vector`, `exploit_tested`, `reproducer_filename`, and `customer_priority`. The CSV must be UTF-8. Deleting the original submission file deletes the whole submission. Only the user who created a pending submission can delete it, delete its files, or submit it.
+
+### `coverage-reports` — manifest coverage
+
+These calls use the content-sources base above and require the **Lightwell Lens** feature. They can return **428** until terms are accepted. A manifest can be at most 15 MiB. `catalog_source` defaults to `pulp`. Package rows are available once analysis has completed. The `CVES` column is `critical/important/moderate/low`.
+
+```bash
+python3 scripts/fetch_lightwell_packages.py coverage-reports create \
+    --file <manifest> [--catalog-source pulp|db] [--json]
+python3 scripts/fetch_lightwell_packages.py coverage-reports get <uuid> [--json]
+python3 scripts/fetch_lightwell_packages.py coverage-reports packages <uuid> \
+    [--search <name>] [--ecosystem <list>] [--match-status exact,partial,none] \
+    [--limit N] [--json]
+```
+
 ## Steps
 
 1. **Confirm credentials exist.** The script needs one of `LW_BEARER_TOKEN`/`--token`, `LW_OFFLINE_TOKEN`/`--offline-token`, or `LW_CLIENT_ID` + `LW_CLIENT_SECRET`/`--client-id` + `--client-secret` (the legacy `CONSOLE_*` names also work). If none is set, walk the user through the one-time setup above — service account by default, or the user-account path if they prefer it.
-2. **Choose the command and filters** from the user's request — `packages` for the cross-repo package view, `package-versions` for specific versions or CVE resolves/vulnerable filtering, `advisories` for security advisories (severity/CVE filtering), `repositories` to list repos, the `repo-packages` / `maven-*` / `python-*` / `npm-*` commands to drill into a single repository by UUID, and `terms` to check whether terms acceptance is required.
+2. **Choose the command and filters** from the user's request — `packages` for the cross-repo package view, `package-versions` for specific versions or CVE resolves/vulnerable filtering, `advisories` for security advisories (severity/CVE filtering), `repositories` to list repos, the `repo-packages` / `maven-*` / `python-*` / `npm-*` commands to drill into a single repository by UUID, `terms` to check whether terms acceptance is required, `submissions` for clearinghouse submissions, and `coverage-reports` to upload a manifest and read its coverage.
 3. **Run the script.** It exchanges credentials for a token, paginates (`limit`/`offset`) automatically, and prints a table (or raw JSON with `--json`).
 4. **Present results** and offer follow-ups — narrow by ecosystem/name, switch security level, drill into `package-versions`, or emit `--json` for further processing.
 
@@ -247,7 +284,7 @@ The OpenAPI spec documents `security_level` as `validated, remediated`; `predisc
 | `token request failed (401/400)` | Wrong `client_id`/`client_secret`, or the secret was rotated. Recreate the service account secret and re-export. |
 | `token request failed`, `invalid_grant` | The offline token is wrong or has lapsed (they expire after 30 days of non-use). Regenerate it at [access.redhat.com/management/api](https://access.redhat.com/management/api) and re-export `LW_OFFLINE_TOKEN`. |
 | API returns **401** | Token invalid/expired. With service-account credentials or an offline token the script fetches a fresh token each run, so a persistent 401 means the credentials themselves are wrong. With `--token`/`LW_BEARER_TOKEN` the token is used as-is and is usually short-lived — grab a new one, or switch to one of the other two methods. |
-| API returns **403** | Authenticated but not authorized. The account you authenticated as — service account or your own user — is not in a group with the **Repositories Viewer** role. This group is not created by default. Managing it requires the **Organization Administrator** or **User Access Administrator** role: with either, create a group with the **Repositories Viewer** role and add the account to it. With neither, ask an org admin to do so (or to grant you User Access Administrator); contact Red Hat technical support if you don't know who your org admins are. |
+| API returns **403** | Authenticated but not authorized. For package and repository calls, the account is not in a group with the **Repositories Viewer** role. This group is not created by default. Managing it requires the **Organization Administrator** or **User Access Administrator** role: with either, create a group with the **Repositories Viewer** role and add the account to it. With neither, ask an org admin to do so (or to grant you User Access Administrator); contact Red Hat technical support if you don't know who your org admins are. For clearinghouse calls, the account needs the **Lightwell clearinghouse** feature, or **Lightwell clearinghouse read** for process and downloads. Delete, delete-file, and submit also require the user who created the submission. Coverage reports need the **Lightwell Lens** feature. |
 | API returns **428** | Lightwell terms have not been accepted. Run `terms` to see the required events, then accept them at [https://console.redhat.com/lightwell](https://console.redhat.com/lightwell). |
 | `predisclosure` returns nothing | Predisclosure is gated by the **account entitlement**, not group/repository permissions — the account lacks the predisclosure entitlement. Confirm entitlement with your Lightwell administrator or Red Hat support. |
 | Empty result set | Filters too narrow — drop `--security-level` or broaden `--name`, and confirm the ecosystem is right. |

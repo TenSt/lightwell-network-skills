@@ -13,6 +13,7 @@ import py_compile
 import re
 import subprocess
 import sys
+import tempfile
 import unittest
 from contextlib import contextmanager, redirect_stdout
 from pathlib import Path
@@ -386,6 +387,274 @@ class FetchScriptTest(unittest.TestCase):
         message = str(caught.exception)
         self.assertIn("428", message)
         self.assertIn("terms command", message)
+
+    def test_submission_help_exits_zero_for_every_action(self):
+        env = os.environ.copy()
+        for key in CRED_KEYS:
+            env.pop(key, None)
+        env["COLUMNS"] = "320"
+        top = subprocess.run(
+            [sys.executable, str(SCRIPT), "submissions", "--help"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            env=env,
+        )
+        self.assertEqual(top.returncode, 0, top.stderr)
+        match = re.search(r"\{([^}]+)\}", top.stdout)
+        self.assertIsNotNone(match, top.stdout)
+        for action in match.group(1).split(","):
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT), "submissions", action, "--help"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                env=env,
+            )
+            self.assertEqual(result.returncode, 0, f"{action}\n{result.stderr}")
+
+    def test_encode_multipart_repeats_file_fields(self):
+        body, content_type = fetch.encode_multipart(
+            [("name", "scan")],
+            [("file", "vulns.csv", b"vulnerability_id,packageurl\n")],
+        )
+        self.assertIn("multipart/form-data; boundary=", content_type)
+        self.assertIn(b'name="name"', body)
+        self.assertIn(b"scan", body)
+        self.assertIn(b'filename="vulns.csv"', body)
+        self.assertIn(b"vulnerability_id,packageurl", body)
+
+    def test_submissions_list_and_packages_use_collection_endpoints(self):
+        cases = [
+            (
+                ["submissions", "list"],
+                "/clearinghouse/submissions",
+                {},
+            ),
+            (
+                ["submissions", "packages", "sub-uuid", "--ecosystem", "Java,Unknown", "--valid-purl", "false"],
+                "/clearinghouse/submissions/sub-uuid/packages",
+                {"ecosystem": "Java,Unknown", "valid_purl": "false"},
+            ),
+        ]
+        for argv, path, expected in cases:
+            with self.subTest(command=" ".join(argv)):
+                with credential_env(LW_BEARER_TOKEN="tok"):
+                    with patch.object(fetch, "fetch_all", return_value=[]) as fetch_all:
+                        with patch.object(sys, "argv", ["fetch_lightwell_packages.py", *argv]):
+                            with redirect_stdout(io.StringIO()):
+                                fetch.main()
+                self.assertEqual(fetch_all.call_args.args[0], path)
+                sent = fetch_all.call_args.args[2]
+                for key, value in expected.items():
+                    self.assertEqual(sent[key], value)
+
+    def test_submission_create_posts_the_json_file(self):
+        with tempfile.NamedTemporaryFile(delete=False) as handle:
+            handle.write(b'{"name":"scan","vulnerabilities":[]}')
+            path = handle.name
+        self.addCleanup(os.remove, path)
+        with credential_env(LW_BEARER_TOKEN="tok"):
+            with patch.object(
+                fetch, "api_request", return_value={"uuid": "abc", "name": "scan", "status": "pending"}
+            ) as api_request:
+                with patch.object(
+                    sys, "argv", ["fetch_lightwell_packages.py", "submissions", "create", "--file", path]
+                ):
+                    with redirect_stdout(io.StringIO()):
+                        fetch.main()
+        self.assertEqual(api_request.call_args.args[0], "/clearinghouse/submissions/create")
+        self.assertEqual(api_request.call_args.kwargs["method"], "POST")
+        self.assertEqual(api_request.call_args.kwargs["headers"]["Content-Type"], "application/json")
+        self.assertIn(b'"name":"scan"', api_request.call_args.kwargs["data"])
+
+    def test_submission_create_csv_posts_multipart(self):
+        with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as handle:
+            handle.write(b"vulnerability_id,packageurl,title,description\n")
+            path = handle.name
+        self.addCleanup(os.remove, path)
+        with credential_env(LW_BEARER_TOKEN="tok"):
+            with patch.object(
+                fetch, "api_request", return_value={"uuid": "abc", "name": "scan", "status": "pending"}
+            ) as api_request:
+                with patch.object(
+                    sys,
+                    "argv",
+                    [
+                        "fetch_lightwell_packages.py",
+                        "submissions",
+                        "create-csv",
+                        "--name",
+                        "scan",
+                        "--file",
+                        path,
+                    ],
+                ):
+                    with redirect_stdout(io.StringIO()):
+                        fetch.main()
+        self.assertEqual(api_request.call_args.args[0], "/clearinghouse/submissions/create/csv")
+        self.assertTrue(
+            api_request.call_args.kwargs["headers"]["Content-Type"].startswith("multipart/form-data;")
+        )
+        self.assertIn(b'name="name"', api_request.call_args.kwargs["data"])
+        self.assertIn(b"scan", api_request.call_args.kwargs["data"])
+
+    def test_submission_mutations_use_the_documented_methods(self):
+        cases = [
+            (["submissions", "delete", "sub-uuid"], "/clearinghouse/submissions/sub-uuid", "DELETE"),
+            (
+                ["submissions", "delete-file", "sub-uuid", "notes.txt"],
+                "/clearinghouse/submissions/sub-uuid/files/notes.txt",
+                "DELETE",
+            ),
+            (["submissions", "submit", "sub-uuid"], "/clearinghouse/submissions/sub-uuid/submit", "POST"),
+            (
+                ["submissions", "process", "sub-uuid"],
+                "/clearinghouse/submissions/sub-uuid/process",
+                "POST",
+            ),
+        ]
+        for argv, path, method in cases:
+            with self.subTest(command=" ".join(argv)):
+                with credential_env(LW_BEARER_TOKEN="tok"):
+                    with patch.object(
+                        fetch, "api_request", return_value={"uuid": "sub-uuid", "status": "submitted"}
+                    ) as api_request:
+                        with patch.object(sys, "argv", ["fetch_lightwell_packages.py", *argv]):
+                            with redirect_stdout(io.StringIO()):
+                                fetch.main()
+                self.assertEqual(api_request.call_args.args[0], path)
+                self.assertEqual(api_request.call_args.kwargs["method"], method)
+
+    def test_submission_download_writes_the_response_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = os.path.join(directory, "submission.json")
+            with credential_env(LW_BEARER_TOKEN="tok"):
+                with patch.object(fetch, "api_request", return_value=b'{"name":"scan"}') as api_request:
+                    with patch.object(
+                        sys,
+                        "argv",
+                        [
+                            "fetch_lightwell_packages.py",
+                            "submissions",
+                            "download",
+                            "sub-uuid",
+                            "--output",
+                            output,
+                        ],
+                    ):
+                        with redirect_stdout(io.StringIO()):
+                            fetch.main()
+            self.assertEqual(
+                api_request.call_args.args[0], "/clearinghouse/submissions/sub-uuid/submission"
+            )
+            self.assertFalse(api_request.call_args.kwargs["json_body"])
+            with open(output, "rb") as handle:
+                self.assertEqual(handle.read(), b'{"name":"scan"}')
+
+    def test_coverage_report_help_exits_zero_for_every_action(self):
+        env = os.environ.copy()
+        for key in CRED_KEYS:
+            env.pop(key, None)
+        env["COLUMNS"] = "240"
+        top = subprocess.run(
+            [sys.executable, str(SCRIPT), "coverage-reports", "--help"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            env=env,
+        )
+        self.assertEqual(top.returncode, 0, top.stderr)
+        match = re.search(r"\{([^}]+)\}", top.stdout)
+        self.assertIsNotNone(match, top.stdout)
+        self.assertEqual(match.group(1).split(","), ["create", "get", "packages"])
+        for action in match.group(1).split(","):
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT), "coverage-reports", action, "--help"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                env=env,
+            )
+            self.assertEqual(result.returncode, 0, f"{action}\n{result.stderr}")
+
+    def test_coverage_report_create_posts_to_the_content_sources_api(self):
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as handle:
+            handle.write(b'{"bomFormat":"CycloneDX"}')
+            path = handle.name
+        self.addCleanup(os.remove, path)
+        with credential_env(LW_BEARER_TOKEN="tok"):
+            with patch.object(
+                fetch, "api_request", return_value={"uuid": "report-1", "status": "pending"}
+            ) as api_request:
+                with patch.object(
+                    sys,
+                    "argv",
+                    [
+                        "fetch_lightwell_packages.py",
+                        "coverage-reports",
+                        "create",
+                        "--file",
+                        path,
+                        "--catalog-source",
+                        "db",
+                    ],
+                ):
+                    with redirect_stdout(io.StringIO()):
+                        fetch.main()
+        self.assertEqual(api_request.call_args.args[0], "/coverage_reports/")
+        self.assertEqual(api_request.call_args.kwargs["base"], fetch.COVERAGE_API_BASE)
+        self.assertEqual(api_request.call_args.kwargs["method"], "POST")
+        body = api_request.call_args.kwargs["data"]
+        self.assertIn(b'name="catalog_source"', body)
+        self.assertIn(b"db", body)
+        self.assertIn(b'name="file"', body)
+
+    def test_coverage_report_reads_use_the_content_sources_api(self):
+        with credential_env(LW_BEARER_TOKEN="tok"):
+            with patch.object(
+                fetch, "api_get", return_value={"uuid": "report-1", "status": "completed", "total": 1}
+            ) as api_get:
+                with patch.object(
+                    sys,
+                    "argv",
+                    ["fetch_lightwell_packages.py", "coverage-reports", "get", "report-1"],
+                ):
+                    with redirect_stdout(io.StringIO()):
+                        fetch.main()
+        self.assertEqual(api_get.call_args.args[0], "/coverage_reports/report-1")
+        self.assertEqual(api_get.call_args.kwargs["base"], fetch.COVERAGE_API_BASE)
+
+        with credential_env(LW_BEARER_TOKEN="tok"):
+            with patch.object(fetch, "fetch_all", return_value=[]) as fetch_all:
+                with patch.object(
+                    sys,
+                    "argv",
+                    [
+                        "fetch_lightwell_packages.py",
+                        "coverage-reports",
+                        "packages",
+                        "report-1",
+                        "--search",
+                        "spring",
+                        "--ecosystem",
+                        "maven",
+                        "--match-status",
+                        "exact,partial",
+                    ],
+                ):
+                    with redirect_stdout(io.StringIO()):
+                        fetch.main()
+        self.assertEqual(fetch_all.call_args.args[0], "/coverage_reports/report-1/packages")
+        self.assertEqual(fetch_all.call_args.kwargs["base"], fetch.COVERAGE_API_BASE)
+        sent = fetch_all.call_args.args[2]
+        self.assertEqual(sent["search"], "spring")
+        self.assertEqual(sent["ecosystem"], "maven")
+        self.assertEqual(sent["match_status"], "exact,partial")
 
 
 if __name__ == "__main__":
